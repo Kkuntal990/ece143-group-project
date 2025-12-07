@@ -18,7 +18,7 @@
 3. [Methodology](#methodology)
 4. [Key Results & Findings](#key-results--findings)
 5. [Visualizations & Insights](#visualizations--insights)
-6. [Model Performance](#model-performance)
+6. [Model Performance](#model-performance-summary)
 7. [Top Performing Institutions](#top-performing-institutions)
 8. [How to Reproduce](#how-to-reproduce)
 9. [File Structure](#file-structure)
@@ -147,51 +147,140 @@ We engineered 5 new features to enhance analysis:
 ### Machine Learning Models
 
 #### Model 1: Random Forest Regression (Primary Predictive Model)
-**Purpose**: Predict 10-year ROI with maximum accuracy
+**Purpose**  
+Predict 10-year ROI (`ROI_10YR`) as accurately as possible using only information a student could reasonably know before enrolling.
 
-**Features**:
-- 67 total features after encoding
-- 10 base features + log-transformed versions
-- Categorical encoding: State, Control Type, Size, Selectivity
+**Feature Construction & Leakage Control**
 
-**Training Process**:
-- **Cross-validation**: GroupKFold (5 splits) by institution ID
-- **Hyperparameter tuning**: RandomizedSearchCV (40 iterations)
-- **Train-test split**: 80-20 split (group-aware to prevent leakage)
-- **Imputation**: Median imputation for missing numerics
+- Start from the cleaned dataset (`clean_df`).
+- Keep only rows with non-missing `ROI_10YR`.
+- Drop rows with too many missing values in key numeric inputs:  
+  `COSTT4_A`, `TUITIONFEE_IN`, `UGDS`, `DEBT_MDN_SUPP`,  
+  `GRAD_DEBT_MDN_SUPP`, `ADM_RATE`, `C150_4`.
+- Target: `ROI_10YR`.
+- Remove ID and “future/outcome-like” columns from the feature set:
+  - ID columns: `UNITID`, `INSTNM`, `CITY`, `YEAR`
+  - Leaky columns: `MD_EARN_WNE_P10`, `MD_EARN_WNE_P6`, `COSTT4_A`, `DEBT_TO_EARNINGS`
+- Base feature set includes (before encoding):
+  - State (`STABBR`)
+  - Control type (`CONTROL`, public vs private)
+  - Admission rate (`ADM_RATE`)
+  - Completion rate (`C150_4`)
+  - In-state tuition (`TUITIONFEE_IN`)
+  - Typical debt levels (`DEBT_MDN_SUPP`, `GRAD_DEBT_MDN_SUPP`)
+  - School size (`UGDS` / `SIZE_CATEGORY`)
+  - Selectivity category (`SELECTIVITY`)
+- Categorical features are converted to `"Missing"` where needed and one-hot encoded
+  with `pd.get_dummies(..., drop_first=True)`, resulting in **67 encoded features**.
 
-**Best Hyperparameters**:
-```python
-{
-    'n_estimators': 229,
-    'max_depth': None,
-    'max_features': 0.3,
-    'min_samples_split': 3,
-    'min_samples_leaf': 1
-}
-```
+**Train / Test Split & Imputation**
+
+- Use `GroupShuffleSplit` (80% train, 20% test) **grouped by `UNITID`**,  
+  so the same college never appears in both train and test under different years.
+- For numeric features, compute **medians on the training set only** and:
+  - Fill missing values in `X_train` with train medians.
+  - Apply the same medians to `X_test` to avoid data leakage.
+- Only original numeric columns are imputed; one-hot dummy columns are left as-is.
+
+**Model & Hyperparameter Tuning**
+
+- Model: `RandomForestRegressor` (`sklearn.ensemble`).
+- Cross-validation: `GroupKFold(n_splits=5)` grouped by `UNITID`.
+- Hyperparameter search: `RandomizedSearchCV` (`sklearn.model_selection`) with:
+  - 40 random configurations
+  - Scoring: negative mean absolute error (`neg_mean_absolute_error`)
+  - Parallel training with `n_jobs=-1`.
+
+- Example best hyperparameters from one run:
+
+    {
+        "n_estimators": 229,
+        "max_depth": None,
+        "max_features": 0.3,
+        "min_samples_split": 3,
+        "min_samples_leaf": 1
+    }
 
 #### Model 2: Multiple Linear Regression (Interpretability)
-**Purpose**: Identify directional relationships and interpret coefficients
 
-**Targets Analyzed**:
-1. ROI_10YR (R²=0.63)
-2. MD_EARN_WNE_P10 (R²=0.43)
-3. DEBT_MDN_SUPP (R²=0.50)
-4. GRAD_DEBT_MDN_SUPP (R²=0.30)
+**Purpose**  
+Provide a simpler, interpretable baseline to understand how school-level features
+relate to ROI, earnings, and debt, and to compare against the Random Forest.
 
-**Preprocessing**:
-- StandardScaler for numerical features
-- Log-transformation for skewed targets
-- Group-aware train-test split
+**Targets Modeled**
 
-#### Model 3: Subgroup-Specific Models
-**Purpose**: Analyze predictability by institution type/size
+We fit separate linear models for four outcomes:
 
-Subgroups analyzed:
-- Public vs Private institutions
-- Large vs Small institutions
-- Geographic regions
+1. `ROI_10YR`
+2. `MD_EARN_WNE_P10` – median earnings 10 years after entry
+3. `DEBT_MDN_SUPP` – median debt (all students)
+4. `GRAD_DEBT_MDN_SUPP` – median debt (graduates only)
+
+Approximate test R² scores (grouped split):
+
+- `ROI_10YR`: ≈ **0.63**
+- `MD_EARN_WNE_P10`: ≈ **0.43**
+- `DEBT_MDN_SUPP`: ≈ **0.50**
+- `GRAD_DEBT_MDN_SUPP`: ≈ **0.30**
+
+**Design Matrix & Log Features**
+
+- Start from the same `df_model` subset used in the Random Forest.
+- Drop only ID columns: `UNITID`, `INSTNM`, `CITY`, `YEAR`.
+- Add log-transformed versions of skewed numeric features **without** overwriting originals, e.g.:
+
+  - `log_UGDS`
+  - `log_MD_EARN_WNE_P6`
+  - `log_TUITIONFEE_IN`
+  - `log_MD_EARN_WNE_P10`
+  - `log_COSTT4_A`
+  - `log_DEBT_MDN_SUPP`
+  - `log_GRAD_DEBT_MDN_SUPP`
+
+  via `np.log1p(value.clip(lower=0))`.
+
+- Categorical variables are filled with `"Missing"` and one-hot encoded (same approach as RF).
+- We build a single encoded feature matrix `X_lin_all` and then, for each target,
+  select the appropriate subset and drop near-duplicate columns.
+
+**Leakage Control per Target**
+
+To avoid target leakage, for each outcome we remove very similar or derived variables,
+including their `log_` versions, for example:
+
+- Predicting **ROI_10YR**:
+  - Drop: `MD_EARN_WNE_P10`, `MD_EARN_WNE_P6`, `COSTT4_A`, `DEBT_TO_EARNINGS`,
+    plus `log_MD_EARN_WNE_P10`, `log_MD_EARN_WNE_P6`, `log_COSTT4_A`.
+
+- Predicting **MD_EARN_WNE_P10**:
+  - Drop: `ROI_10YR`, `MD_EARN_WNE_P6`, `DEBT_TO_EARNINGS`,
+    plus `log_MD_EARN_WNE_P10`, `log_MD_EARN_WNE_P6`.
+
+- Predicting **DEBT_MDN_SUPP**:
+  - Drop: `GRAD_DEBT_MDN_SUPP`, `DEBT_TO_EARNINGS`,
+    plus `log_DEBT_MDN_SUPP`, `log_GRAD_DEBT_MDN_SUPP`.
+
+- Predicting **GRAD_DEBT_MDN_SUPP**:
+  - Drop: `DEBT_MDN_SUPP`, `DEBT_TO_EARNINGS`,
+    plus `log_DEBT_MDN_SUPP`, `log_GRAD_DEBT_MDN_SUPP`.
+
+**Train / Test Split, Imputation, and Scaling**
+
+- For each target, we:
+  - Filter out rows where the target is missing.
+  - Use `GroupShuffleSplit` (80/20) grouped by `UNITID` for train–test.
+- For numeric columns:
+  - Median-impute missing values using **train medians**,
+  - Apply the same medians to the test set.
+- Standardize numeric columns with `StandardScaler` (fit on train, transform both).
+
+**Target Transformations**
+
+- Because several targets are strongly right-skewed, we model them on the log scale:
+
+  - `MD_EARN_WNE_P10`, `DEBT_MDN_SUPP`, `GRAD_DEBT_MDN_SUPP` are passed through `np.log1p(y)` for training,
+    and predictions are transformed back with `np.expm1(...)`.
+  - `ROI_10YR` (which can be negative) is kept on the original scale.
 
 ---
 
