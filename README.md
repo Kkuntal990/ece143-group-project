@@ -29,11 +29,14 @@
 
 ## Project Overview
 
-Higher education represents one of the most significant financial investments individuals make in their lifetime. However, prospective students and their families often lack clear, data-driven insights when choosing colleges. This project addresses three critical questions:
+Higher education represents one of the most significant financial investments individuals make in their lifetime. However, prospective students and their families often lack clear, data-driven insights when choosing colleges. This project addresses these critical questions:
 
 1. **Which institutions provide the best return on investment (ROI)?**
 2. **What factors predict student completion rates?**
 3. **How do different college characteristics affect graduate earnings and student debt levels?**
+4. **How does geographical location influence access to high-quality education and student outcomes across states?​**
+5. **What is the relationship between institutional selectivity, class size and long-term career success?​**
+6. **How have the returns on investment in higher education evolved over the past decade & are rising costs still justified by earnings growth?**
 
 Using the U.S. Department of Education's College Scorecard dataset (196,163 records spanning 1996-2023), we employ machine learning and statistical analysis to identify patterns in higher education outcomes. Our analysis combines predictive modeling (Random Forest achieving **R²=0.74**) with interpretable regression to both forecast outcomes and understand driving factors.
 
